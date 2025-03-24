@@ -8,5 +8,3 @@ COPY . /src/
 WORKDIR /src
 
 RUN pip install --break-system-packages -r requirements.txt
-
-RUN python app.py
