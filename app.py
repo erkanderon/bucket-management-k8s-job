@@ -44,6 +44,7 @@ def minio_upload(access_key, secret_key, endpoint_url, bucket_name, file_path, o
 
     except Exception as e:
         print(f"Dosya yükleme hatası: {e}")
+        return "error"
 
 
 
@@ -121,33 +122,56 @@ def execute_shell_command(command):
     except subprocess.CalledProcessError as e:
         print(f"Command failed with error: {e}")
         print(e.stderr)
-        return e
+        return "error"
 
 def login_registry(registry, username, password):
     print("Logging in Registry")
-    execute_shell_command("docker login -u='{}' -p='{}' {}".format(username, password, registry))
+    operation = execute_shell_command("docker login -u='{}' -p='{}' {}".format(username, password, registry))
+
+    if operation != "error":
+        return "success"
+    return operation
 
 def docker_pull(name, version):
     print("Pulling image {}/{}:{}".format(registry, name, version))
-    execute_shell_command("docker pull {}/{}:{}".format(registry, name, version))
+    operation = execute_shell_command("docker pull {}/{}:{}".format(registry, name, version))
+    
+    if operation != "error":
+        return "success"
+    return operation
 
 def gzip_image(name, version):
     print("Zipping image")
     today = datetime.today()
     now = today.strftime("%d_%m_%Y-%H_%M")
-    execute_shell_command("docker save {}/{}:{} | gzip > {}_{}_{}.tar.gz".format(registry, name, version, name, version, now))
-    return "{}_{}_{}.tar.gz".format(name, version, now), today.year, today.month
+    operation = execute_shell_command("docker save {}/{}:{} | gzip > {}_{}_{}.tar.gz".format(registry, name, version, name, version, now))
+    if operation != "error":
+        operation = "success"
+
+    return "{}_{}_{}.tar.gz".format(name, version, now), today.year, today.month, operation
 
 response_data = send_get_request(backup_list_url)
 if response_data:
     for image in response_data["data"]:
         if not logged_in:
-            login_registry(registry, registry_username, registry_password)
+            operation = login_registry(registry, registry_username, registry_password)
+            if operation == "error":
+                send_post_request(backup_update_url, {"name": image["name"], "version": image["version"], "status": "FAILED"})
+                continue
             logged_in = True
 
-        docker_pull(image["name"], image["version"])
-        image_zip, year, month = gzip_image(image["name"], image["version"])
-        minio_upload(access_key, secret_key, endpoint_url, bucket_name, "./{}".format(image_zip), "{}/{}/{}".format(year, month, image_zip))
+        operation = docker_pull(image["name"], image["version"])
+        if operation == "error":
+            send_post_request(backup_update_url, {"name": image["name"], "version": image["version"], "status": "FAILED"})
+            continue
+        image_zip, year, month, operation = gzip_image(image["name"], image["version"])
+        if operation == "error":
+            send_post_request(backup_update_url, {"name": image["name"], "version": image["version"], "status": "FAILED"})
+            continue
+        operation = minio_upload(access_key, secret_key, endpoint_url, bucket_name, "./{}".format(image_zip), "{}/{}/{}".format(year, month, image_zip))
+        if operation == "error":
+            send_post_request(backup_update_url, {"name": image["name"], "version": image["version"], "status": "FAILED"})
+            continue
         send_post_request(backup_update_url, {"name": image["name"], "version": image["version"], "status": "COMPLETED"})
 else:
     print("Failed to get response data.")
