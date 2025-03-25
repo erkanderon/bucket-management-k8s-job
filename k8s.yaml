@@ -1,0 +1,78 @@
+
+
+apiVersion: v1
+kind: ConfigMap
+metadata:  
+  name: backup-job-script-cm  
+  namespace: minio
+  data:  backup.sh: |
+      #!/bin/sh    
+      echo "Activating dockerd";    
+      dockerd &    
+      echo "Executing app.py";    
+      python /src/app.py;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:  
+  name: backup-job  
+  namespace: minio
+spec:  
+  template:    
+    spec:      
+      containers:      
+      - name: env-container        
+        image: registry.tr.zip.co/backup-job:1.0.2        
+        command: ["/bin/sh", "-c", "/execution/backup.sh"]
+#        command: ["/bin/sh", "-c", "dockerd & sleep 250; docker ps"]        
+        securityContext:          
+          privileged: true        
+        volumeMounts:        
+        - name: script-volume          
+          mountPath: /execution        
+        - name: docker-storage          
+          mountPath: /var/lib/docker        
+        env:        
+        - name: registry_username          
+          valueFrom:            
+            secretKeyRef:              
+              name: nexus-credentials              
+              key: username        
+        - name: registry_password          
+          valueFrom:            
+            secretKeyRef:              
+              name: nexus-credentials              
+              key: password        
+        - name: registry          
+          value: "registry.tr.zip.co"        
+        - name: backup_update_url          
+          value: "http://backup-api-ui-svc.minio.svc:8080/api/update"        
+        - name: backup_list_url          
+          value: "http://backup-api-ui-svc.minio.svc:8080/api/get_all_pending_images"        
+        - name: minio_url          
+          value: "http://minio.minio.svc:9000"        
+        - name: bucket_name          
+          value: "nexus-backup"        
+        - name: minio_access          
+          valueFrom:            
+          secretKeyRef:              
+            name: minio-access-secret              
+            key: access        
+        - name: minio_secret          
+          valueFrom:            
+          secretKeyRef:              
+            name: minio-access-secret              
+            key: secret      
+        volumes:      
+          - name: script-volume        
+            configMap:          
+              name: backup-job-script-cm          
+              defaultMode: 0755          
+              items:          
+                - key: backup.sh # The key from the ConfigMap data            
+                  path: backup.sh      
+          - name: docker-storage        
+            persistentVolumeClaim:          
+              claimName: backup-job-pvc      
+        restartPolicy: Never  
+  backoffLimit: 4
